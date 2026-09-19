@@ -5,10 +5,6 @@ Pascal-era 6 GB GPU. Nothing here calls a cloud API — every model runs on your
 
 > **العربية:** [`README.ar.md`](README.ar.md)
 
-> **This kit is staged inside another repository.** To split it out into its own
-> standalone git repo in one step:
-> `powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-new-repo.ps1`
-
 ---
 
 ## Target machine

@@ -1,274 +1,197 @@
 #!/usr/bin/env python3
-"""Measure real Ollama throughput and GPU/CPU placement on this machine.
-
-Blog benchmarks were run on someone else's hardware. This one runs on yours.
-
-For each model it reports generation speed, prompt processing speed, cold load time,
-and -- the number that matters most on a 6 GB card -- what percentage of the model
-actually ended up in VRAM.
-
-Standard library only. No pip install.
-
-    python scripts/bench.py --all
-    python scripts/bench.py --model hunter-open --runs 5
-    python scripts/bench.py --all --json results-before.json
 """
+bench.py - token-throughput benchmark for Ollama models on this rig.
 
-from __future__ import annotations
+For every pulled model (or a --models subset) it:
+  1. cold-loads the model and records load time (load_duration)
+  2. runs a timed generation: P prompt tokens, N generated tokens
+  3. reports prompt-processing tok/s, generation tok/s, TTFT & total ms
+  4. checks /api/ps to see whether the model fit in VRAM or spilled to RAM
+
+Pure Python stdlib (urllib) - no pip installs required.
+Usage:
+    python bench.py                       # all pulled models, defaults
+    python bench.py --models qwen2.5:7b,mistral:7b
+    python bench.py --prompt-tokens 1024 --gen-tokens 256
+
+Output: bench-results.json next to this script + a console summary table.
+"""
 
 import argparse
 import json
-import statistics
+import os
 import sys
 import time
-import urllib.error
 import urllib.request
 
-DEFAULT_HOST = "http://127.0.0.1:11434"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+REQUEST_TIMEOUT = 900  # generous: first model load on old GPUs is slow
+DEFAULT_PROMPT_TOKENS = 512
+DEFAULT_GEN_TOKENS = 128
 
-# Built by setup.ps1. Anything not installed is skipped with a note.
-DEFAULT_MODELS = [
-    "hunter-open",
-    "hunter-open-fast",
-    "hunter-dolphin",
-    "hunter-max",
-]
-
-# Long enough to get past warmup noise, short enough that Tier 3 finishes this decade.
-PROMPT = (
-    "Explain how a CPU cache hierarchy works, and why cache misses dominate the cost "
-    "of pointer-chasing data structures. Be specific and concrete."
+# ~1 token ≈ 4 chars for English prose; this fixed paragraph repeats to fill the prompt.
+_PROSE = (
+    "The quick brown fox jumps over the lazy dog near the river bank while the "
+    "morning sun rises slowly behind the hills. Local language models run on "
+    "consumer hardware when the model size fits inside the graphics card memory, "
+    "because inference speed is limited by memory bandwidth rather than raw "
+    "compute power. Scientists measure token throughput in tokens per second and "
+    "report both prompt processing speed and generation speed separately, since "
+    "long documents and interactive chat place very different demands on the "
+    "system. "
 )
 
-NUM_PREDICT = 200
 
-# Tier 3 runs at single-digit tokens/sec, so a short timeout would fail it spuriously.
-TIMEOUT_S = 900
-
-
-class OllamaError(RuntimeError):
-    pass
-
-
-def _request(host: str, path: str, payload: dict | None = None, timeout: int = 30) -> dict:
-    url = f"{host.rstrip('/')}{path}"
+def api(path: str, payload: dict | None = None) -> dict:
+    url = OLLAMA_HOST + path
+    req = urllib.request.Request(url, method="POST" if payload else "GET")
     data = None
-    headers = {}
     if payload is not None:
+        req.add_header("Content-Type", "application/json")
         data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace").strip()
-        raise OllamaError(f"HTTP {exc.code} from {path}: {body}") from exc
-    except urllib.error.URLError as exc:
-        raise OllamaError(f"Cannot reach Ollama at {host} ({exc.reason}).") from exc
-    except TimeoutError as exc:
-        raise OllamaError(f"Timed out after {timeout}s waiting on {path}.") from exc
+    with urllib.request.urlopen(req, data=data, timeout=REQUEST_TIMEOUT) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
-def installed_models(host: str) -> set[str]:
-    tags = _request(host, "/api/tags")
-    names = set()
-    for model in tags.get("models", []):
-        name = model.get("name", "")
-        names.add(name)
-        # "hunter-open:latest" should also match a request for "hunter-open"
-        if ":" in name:
-            names.add(name.split(":", 1)[0])
-    return names
+def list_models() -> list[str]:
+    tags = api("/api/tags")
+    return sorted(m["name"] for m in tags.get("models", []))
 
 
-def placement(host: str, model: str) -> dict:
-    """Ask Ollama how much of the loaded model is actually in VRAM.
-
-    On a 6 GB card this is the single most useful diagnostic: anything below 100%
-    means layers spilled to the CPU and the throughput number needs that context.
-    """
-    try:
-        running = _request(host, "/api/ps")
-    except OllamaError:
-        return {}
-
-    for entry in running.get("models", []):
-        name = entry.get("name", "")
-        if name == model or name.split(":", 1)[0] == model:
-            total = entry.get("size") or 0
-            vram = entry.get("size_vram") or 0
-            if not total:
-                return {}
-            return {
-                "total_bytes": total,
-                "vram_bytes": vram,
-                "gpu_percent": round(100.0 * vram / total, 1),
-            }
-    return {}
+def make_prompt(target_tokens: int) -> str:
+    # ~4 chars/token for English prose. NOTE: slice by CHARACTERS, then the
+    # tokenizer decides the real count; 512 tokens ≈ 2048 chars.
+    chars_needed = target_tokens * 4
+    return (_PROSE * (chars_needed // len(_PROSE) + 1))[:chars_needed]
 
 
-def generate(host: str, model: str, num_predict: int) -> dict:
-    payload = {
-        "model": model,
-        "prompt": PROMPT,
-        "stream": False,
-        "options": {"num_predict": num_predict},
-    }
-    return _request(host, "/api/generate", payload, timeout=TIMEOUT_S)
-
-
-def _rate(count: int | None, duration_ns: int | None) -> float | None:
-    """Tokens per second from Ollama's nanosecond timings."""
-    if not count or not duration_ns:
-        return None
-    return count / (duration_ns / 1e9)
-
-
-def bench_model(host: str, model: str, runs: int) -> dict:
-    print(f"\n=== {model} ===")
-
-    print("  warmup (cold load, not timed) ...", end="", flush=True)
-    warm_start = time.time()
-    try:
-        warm = generate(host, model, num_predict=16)
-    except OllamaError as exc:
-        print(" FAILED")
-        return {"model": model, "error": str(exc)}
-    print(f" {time.time() - warm_start:.1f}s")
-
-    load_ns = warm.get("load_duration")
-    place = placement(host, model)
-    if place:
-        pct = place["gpu_percent"]
-        flag = "" if pct >= 99.5 else "   <-- spilled to CPU"
-        print(
-            f"  placement: {pct}% GPU "
-            f"({place['vram_bytes'] / 1e9:.2f} of {place['total_bytes'] / 1e9:.2f} GB in VRAM)"
-            f"{flag}"
-        )
-    else:
-        print("  placement: unavailable (/api/ps reported nothing for this model)")
-
-    gen_rates: list[float] = []
-    prompt_rates: list[float] = []
-
-    for i in range(1, runs + 1):
-        print(f"  run {i}/{runs} ...", end="", flush=True)
-        try:
-            result = generate(host, model, NUM_PREDICT)
-        except OllamaError as exc:
-            print(f" FAILED ({exc})")
-            continue
-
-        gen = _rate(result.get("eval_count"), result.get("eval_duration"))
-        prm = _rate(result.get("prompt_eval_count"), result.get("prompt_eval_duration"))
-        if gen is not None:
-            gen_rates.append(gen)
-        if prm is not None:
-            prompt_rates.append(prm)
-        print(f" {gen:.1f} tok/s" if gen is not None else " no timing data")
-
-    if not gen_rates:
-        return {"model": model, "error": "every timed run failed"}
-
-    record = {
-        "model": model,
-        "runs": len(gen_rates),
-        "generation_tok_s": {
-            "median": round(statistics.median(gen_rates), 2),
-            "min": round(min(gen_rates), 2),
-            "max": round(max(gen_rates), 2),
+def generate(model: str, prompt: str, gen_tokens: int) -> dict:
+    return api(
+        "/api/generate",
+        {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": gen_tokens, "temperature": 0.0, "seed": 42},
         },
-        "prompt_tok_s": (
-            round(statistics.median(prompt_rates), 2) if prompt_rates else None
-        ),
-        "cold_load_s": round(load_ns / 1e9, 2) if load_ns else None,
-        "placement": place or None,
+    )
+
+
+def ns_to_ms(ns: int | None) -> float:
+    return (ns or 0) / 1e6
+
+
+def bench_model(model: str, prompt_tokens: int, gen_tokens: int) -> dict:
+    prompt = make_prompt(prompt_tokens)
+
+    # --- warmup pass: forces the load, measures cold-load time, warms KV cache
+    t0 = time.perf_counter()
+    warm = generate(model, "Say hello in one word.", 8)
+    wall_warm_s = time.perf_counter() - t0
+    cold_load_ms = ns_to_ms(warm.get("load_duration"))
+
+    # --- timed pass: steady-state throughput (model still warm)
+    t0 = time.perf_counter()
+    run = generate(model, prompt, gen_tokens)
+    wall_timed_s = time.perf_counter() - t0
+
+    pe_count = run.get("prompt_eval_count", 0)
+    pe_dur_ns = run.get("prompt_eval_duration", 0)
+    e_count = run.get("eval_count", 0)
+    e_dur_ns = run.get("eval_duration", 0)
+
+    prompt_tok_s = pe_count / (pe_dur_ns / 1e9) if pe_dur_ns else None
+    gen_tok_s = e_count / (e_dur_ns / 1e9) if e_dur_ns else None
+    ttft_ms = ns_to_ms(pe_dur_ns)  # time spent burning the prompt = time to first token
+
+    # --- VRAM placement via /api/ps
+    placement = {"in_vram": None, "vram_mb": None, "total_mb": None}
+    try:
+        ps = api("/api/ps")
+        for m in ps.get("models", []):
+            if m["name"] == model or m["name"].startswith(model.split(":")[0]):
+                placement = {
+                    "in_vram": bool(m.get("size_vram", 0)) and m.get("size_vram", 0) >= m.get("size", 0) * 0.999,
+                    "vram_mb": round((m.get("size_vram") or 0) / (1024 * 1024), 0),
+                    "total_mb": round((m.get("size") or 0) / (1024 * 1024), 0),
+                }
+                break
+    except Exception:
+        pass
+
+    return {
+        "model": model,
+        "prompt_tokens_requested": prompt_tokens,
+        "gen_tokens_requested": gen_tokens,
+        "prompt_eval_count": pe_count,
+        "eval_count": e_count,
+        "prompt_tok_s": round(prompt_tok_s, 2) if prompt_tok_s else None,
+        "gen_tok_s": round(gen_tok_s, 2) if gen_tok_s else None,
+        "ttft_ms": round(ttft_ms, 1),
+        "total_ms": round(ns_to_ms(run.get("total_duration")), 1),
+        "cold_load_ms": round(cold_load_ms, 1),
+        "wall_warmup_s": round(wall_warm_s, 2),
+        "wall_timed_s": round(wall_timed_s, 2),
+        "vram": placement,
     }
-    print(f"  median: {record['generation_tok_s']['median']} tok/s generation")
-    return record
 
 
-def print_table(records: list[dict]) -> None:
-    print("\n" + "=" * 72)
-    print(f"{'model':<18}{'gen tok/s':>12}{'prompt tok/s':>14}{'GPU':>8}{'load s':>10}")
-    print("-" * 72)
-    for rec in records:
-        if "error" in rec:
-            print(f"{rec['model']:<18}{'-- ' + rec['error'][:48]:>52}")
-            continue
-        gen = rec["generation_tok_s"]["median"]
-        prm = rec["prompt_tok_s"]
-        place = rec.get("placement") or {}
-        gpu = f"{place['gpu_percent']}%" if place else "?"
-        load = rec["cold_load_s"]
-        print(
-            f"{rec['model']:<18}{gen:>12.1f}"
-            f"{(f'{prm:.1f}' if prm else '?'):>14}"
-            f"{gpu:>8}"
-            f"{(f'{load:.1f}' if load else '?'):>10}"
-        )
-    print("=" * 72)
-    print("Anything below 100% GPU means layers spilled to system RAM.")
-    print("Fix that before drawing conclusions from the speed column.\n")
+def fmt_row(r: dict) -> str:
+    g = f"{r['gen_tok_s']:>7.1f}" if r["gen_tok_s"] else "     -"
+    p = f"{r['prompt_tok_s']:>7.1f}" if r["prompt_tok_s"] else "     -"
+    ttft = f"{r['ttft_ms']:>7.0f}"
+    vram = "VRAM" if r["vram"]["in_vram"] else ("RAM" if r["vram"]["in_vram"] is False else "  ?")
+    return f"{r['model']:<32} {p} {g} {ttft} {vram}"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default=DEFAULT_HOST, help=f"default {DEFAULT_HOST}")
-    parser.add_argument("--model", action="append", dest="models",
-                        help="model to benchmark (repeatable)")
-    parser.add_argument("--all", action="store_true",
-                        help="benchmark every hunter-* model that is installed")
-    parser.add_argument("--runs", type=int, default=3, help="timed runs per model")
-    parser.add_argument("--json", default="bench-results.json",
-                        help="where to write results (default bench-results.json)")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="Benchmark Ollama models on this rig.")
+    ap.add_argument("--models", help="comma-separated subset of models to bench")
+    ap.add_argument("--prompt-tokens", type=int, default=DEFAULT_PROMPT_TOKENS)
+    ap.add_argument("--gen-tokens", type=int, default=DEFAULT_GEN_TOKENS)
+    args = ap.parse_args()
 
-    if not args.models and not args.all:
-        parser.error("pass --all, or --model NAME at least once")
-
-    try:
-        version = _request(args.host, "/api/version").get("version", "unknown")
-    except OllamaError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        print("Is Ollama running? Try: ollama list", file=sys.stderr)
-        return 1
-    print(f"Ollama {version} at {args.host}")
-
-    try:
-        available = installed_models(args.host)
-    except OllamaError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    all_models = list_models()
+    if not all_models:
+        print("No models found - run `ollama pull <name>` first.", file=sys.stderr)
         return 1
 
-    wanted = args.models if args.models else DEFAULT_MODELS
-    targets = [m for m in wanted if m in available]
-    missing = [m for m in wanted if m not in available]
+    models = all_models
+    if args.models:
+        wanted = [m.strip() for m in args.models.split(",") if m.strip()]
+        missing = [m for m in wanted if m not in all_models]
+        if missing:
+            print(f"Unknown models (not in `ollama list`): {missing}", file=sys.stderr)
+            return 1
+        models = wanted
 
-    if missing:
-        print(f"skipping (not installed): {', '.join(missing)}")
-        if args.models:
-            print("Run scripts/setup.ps1 first, or check `ollama list`.")
-    if not targets:
-        print("error: none of the requested models are installed.", file=sys.stderr)
-        return 1
+    print(f"Benchmarking {len(models)} model(s) on {OLLAMA_HOST}")
+    print(f"prompt={args.prompt_tokens} tokens | gen={args.gen_tokens} tokens | temp=0\n")
 
-    records = [bench_model(args.host, model, args.runs) for model in targets]
-    print_table(records)
+    results = []
+    for i, model in enumerate(models, 1):
+        print(f"[{i}/{len(models)}] {model} ... (this can take a minute)", flush=True)
+        try:
+            r = bench_model(model, args.prompt_tokens, args.gen_tokens)
+            results.append(r)
+            print("  " + fmt_row(r))
+        except Exception as exc:  # keep going if a model errors (bad tag etc.)
+            print(f"  !! failed: {exc}", file=sys.stderr)
+            results.append({"model": model, "error": str(exc)})
+        sys.stdout.flush()
 
-    payload = {
-        "ollama_version": version,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "prompt_tokens_requested": NUM_PREDICT,
-        "results": records,
-    }
-    with open(args.json, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-    print(f"Wrote {args.json}")
+    print("\n=== SUMMARY (prompt tok/s | gen tok/s | TTFT ms | placement) ===")
+    for r in results:
+        if "error" not in r:
+            print("  " + fmt_row(r))
+        else:
+            print(f"  {r['model']:<32} ERROR: {r['error']}")
 
-    return 0 if any("error" not in r for r in records) else 1
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bench-results.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump({"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": results}, f, indent=2)
+    print(f"\nSaved {out}")
+    return 0
 
 
 if __name__ == "__main__":

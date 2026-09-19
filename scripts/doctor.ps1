@@ -1,185 +1,174 @@
+#requires -Version 5.1
 <#
 .SYNOPSIS
-    Health check for the local LLM rig. Run this after every Ollama update.
+    doctor.ps1 - Health check for a local LLM rig (Ollama + NVIDIA on Windows).
 
 .DESCRIPTION
-    The failure mode this exists to catch: an Ollama update ships a CUDA runtime that no
-    longer supports Pascal (CUDA 13 dropped compute capability 6.1), the GTX 1060 silently
-    stops being used, and everything quietly falls back to the CPU at a fraction of the
-    speed. There is no error message when that happens -- only this check.
+    Verifies, in order:
+      1. Ollama binary present + version
+      2. Ollama server reachable on 127.0.0.1:11434 (auto-starts `ollama serve` if needed)
+      3. NVIDIA GPU visible to nvidia-smi, with free VRAM headroom
+      4. Python available (for bench.py / refusal-probe.py)
+      5. Pulled models (ollama list) and their on-disk footprint
+      6. Currently loaded models (/api/ps) and VRAM placement
 
-    Exits non-zero if the GPU is not actually being used for inference.
-
-.EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
+    Prints a PASS / WARN / FAIL report. Exit code 0 = everything healthy,
+    1 = at least one FAIL, 2 = only warnings (environment usable but degraded).
 #>
-
 [CmdletBinding()]
 param(
-    [string]$Host_ = "http://127.0.0.1:11434"
+    [switch]$SkipGpuCheck,
+    [int]$ApiTimeoutSec = 5
 )
 
-$ErrorActionPreference = "Stop"
-$problems = @()
-$warnings = @()
+$ErrorActionPreference = 'Stop'
+$OLLAMA_API  = 'http://127.0.0.1:11434'
+$results     = [System.Collections.Generic.List[object]]::new()
+$exitCode    = 0
 
-function Write-Section($text) {
-    Write-Host ""
-    Write-Host "== $text" -ForegroundColor Cyan
+function Write-Check {
+    param(
+        [string]$Name,
+        [ValidateSet('PASS', 'WARN', 'FAIL', 'INFO')][string]$Status,
+        [string]$Detail = ''
+    )
+    $color = @{ PASS = 'Green'; WARN = 'Yellow'; FAIL = 'Red'; INFO = 'Cyan' }[$Status]
+    Write-Host ("[{0}] {1}" -f $Status, $Name) -ForegroundColor $color -NoNewline
+    if ($Detail) { Write-Host (" - {0}" -f $Detail) -ForegroundColor Gray }
+    else { Write-Host '' }
+    $script:results.Add([pscustomobject]@{ check = $Name; status = $Status; detail = $Detail })
+    if ($Status -eq 'FAIL') { $script:exitCode = 1 }
+    elseif ($Status -eq 'WARN' -and $script:exitCode -lt 2) { $script:exitCode = 2 }
 }
 
-function Write-Ok($text)   { Write-Host "  [ok]   $text" -ForegroundColor Green }
-function Write-Warn($text) { Write-Host "  [warn] $text" -ForegroundColor Yellow }
-function Write-Bad($text)  { Write-Host "  [FAIL] $text" -ForegroundColor Red }
+Write-Host '===== Local LLM Rig: doctor.ps1 =====' -ForegroundColor Magenta
 
-Write-Host "Local LLM rig health check" -ForegroundColor White
-
-# --------------------------------------------------------------------------- Ollama
-Write-Section "Ollama"
-
-if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-    Write-Bad "ollama not found on PATH. Install from https://ollama.com/download"
-    exit 1
-}
-
-$ollamaVersion = (& ollama --version 2>&1 | Out-String).Trim()
-Write-Ok "installed: $ollamaVersion"
-Write-Host "         (note this version -- if a future update breaks Pascal, reinstall it)" -ForegroundColor DarkGray
-
-try {
-    $null = Invoke-RestMethod -Uri "$Host_/api/version" -TimeoutSec 5
-    Write-Ok "service responding at $Host_"
-} catch {
-    Write-Bad "service not responding at $Host_. Start Ollama from the Start menu."
-    exit 1
-}
-
-# ------------------------------------------------------------------------------ GPU
-Write-Section "GPU"
-
-$haveSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
-if (-not $haveSmi) {
-    Write-Warn "nvidia-smi not found -- cannot verify the driver. Is the NVIDIA driver installed?"
-    $warnings += "nvidia-smi missing"
+# --- 1. Ollama binary -----------------------------------------------------
+$ollama = Get-Command ollama -ErrorAction SilentlyContinue
+if ($ollama) {
+    $ver = (& $ollama.Source --version 2>$null | Select-Object -First 1)
+    Write-Check 'Ollama binary' 'PASS' "found: $($ollama.Source) [$ver]"
 } else {
-    $query = & nvidia-smi --query-gpu=name,driver_version,memory.total,memory.free `
-                          --format=csv,noheader,nounits 2>&1
-    $row = ($query | Select-Object -First 1) -split '\s*,\s*'
-    if ($row.Count -ge 4) {
-        $name      = $row[0]
-        $driver    = $row[1]
-        $totalMiB  = [int]$row[2]
-        $freeMiB   = [int]$row[3]
-        Write-Ok "$name (driver $driver)"
-        Write-Ok ("VRAM: {0} MiB free of {1} MiB total" -f $freeMiB, $totalMiB)
+    $known = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
+    if (Test-Path $known) {
+        $ver = (& $known --version 2>$null | Select-Object -First 1)
+        Write-Check 'Ollama binary' 'PASS' "found: $known [$ver]"
+        $ollama = [pscustomobject]@{ Source = $known }
+    } else {
+        Write-Check 'Ollama binary' 'FAIL' 'ollama.exe not on PATH or at default install location'
+    }
+}
 
-        # Tier 2 needs roughly 5.2 GB (~5300 MiB) free to stay fully on the GPU.
-        if ($freeMiB -lt 5300) {
-            Write-Warn "less than 5300 MiB free -- hunter-open (5.0 GB) will likely spill to CPU."
-            Write-Host "         Close the browser and anything else using the GPU." -ForegroundColor DarkGray
-            $warnings += "low free VRAM"
+# --- 2. Ollama server -----------------------------------------------------
+$serverOk = $false
+try {
+    $v = Invoke-RestMethod -Uri "$OLLAMA_API/api/version" -TimeoutSec $ApiTimeoutSec
+    Write-Check 'Ollama server' 'PASS' "reachable at $OLLAMA_API (api version $($v.version))"
+    $serverOk = $true
+} catch {
+    if ($ollama) {
+        Write-Host '  -- Ollama server not responding; attempting to start it...' -ForegroundColor Gray
+        try {
+            Start-Process -FilePath $ollama.Source -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+            Start-Sleep -Seconds 4
+            $v = Invoke-RestMethod -Uri "$OLLAMA_API/api/version" -TimeoutSec $ApiTimeoutSec
+            Write-Check 'Ollama server' 'PASS' "auto-started, api version $($v.version)"
+            $serverOk = $true
+        } catch {
+            Write-Check 'Ollama server' 'FAIL' 'could not reach API (is port 11434 blocked?)'
         }
     } else {
-        Write-Warn "could not parse nvidia-smi output"
-        $warnings += "nvidia-smi unparseable"
+        Write-Check 'Ollama server' 'FAIL' 'ollama binary missing - cannot start server'
     }
 }
 
-# -------------------------------------------------------------------- Env / settings
-Write-Section "Settings"
-
-# Read Process, then User, then Machine. Checking only "User" reports a false
-# "not set" when the variable lives at Machine scope or in the current session,
-# which sends you chasing a problem that is not there.
-function Get-EnvAnyScope($name) {
-    foreach ($scope in @("Process", "User", "Machine")) {
-        $value = [Environment]::GetEnvironmentVariable($name, $scope)
-        if (-not [string]::IsNullOrEmpty($value)) {
-            return [pscustomobject]@{ Value = $value; Scope = $scope }
-        }
-    }
-    return $null
-}
-
-$kvFound = Get-EnvAnyScope "OLLAMA_KV_CACHE_TYPE"
-$kv = if ($kvFound) { $kvFound.Value } else { $null }
-if ($kv -eq "q8_0") {
-    Write-Ok "OLLAMA_KV_CACHE_TYPE = q8_0  (from $($kvFound.Scope) scope)"
-} elseif ([string]::IsNullOrEmpty($kv)) {
-    Write-Warn "OLLAMA_KV_CACHE_TYPE not set -- the KV cache will use f16 and waste VRAM."
-    Write-Host "         Fix: run scripts\setup.ps1, or  setx OLLAMA_KV_CACHE_TYPE ""q8_0""" -ForegroundColor DarkGray
-    $warnings += "KV cache not quantized"
-} else {
-    Write-Warn "OLLAMA_KV_CACHE_TYPE = $kv (expected q8_0, from $($kvFound.Scope) scope)"
-    $warnings += "unexpected KV cache type"
-}
-
-$faFound = Get-EnvAnyScope "OLLAMA_FLASH_ATTENTION"
-$faShown = if ($faFound) { "$($faFound.Value)  (from $($faFound.Scope) scope)" } else { "<unset>" }
-Write-Host "  [info] OLLAMA_FLASH_ATTENTION = $faShown" -ForegroundColor DarkGray
-Write-Host "         Flash attention is not a guaranteed win on Pascal. Benchmark both." -ForegroundColor DarkGray
-
-# ------------------------------------------------------------------------- Real test
-Write-Section "Inference placement (the actual test)"
-
-$tags = Invoke-RestMethod -Uri "$Host_/api/tags" -TimeoutSec 15
-$installed = @($tags.models | ForEach-Object { $_.name })
-
-if ($installed.Count -eq 0) {
-    Write-Warn "no models installed -- cannot verify GPU is used. Run scripts\setup.ps1 first."
-    $warnings += "no models installed"
-} else {
-    # Prefer the small hunter model -- it loads fast and should be 100% GPU,
-    # which makes it the cleanest signal. Otherwise fall back to the first listed.
-    $probe = $installed | Where-Object { $_ -like "hunter-open-fast*" } | Select-Object -First 1
-    if (-not $probe) { $probe = $installed | Select-Object -First 1 }
-
-    Write-Host "  loading $probe ..." -NoNewline
-    $body = @{ model = $probe; prompt = "hi"; stream = $false;
-               options = @{ num_predict = 1 } } | ConvertTo-Json -Depth 4
+# --- 3. NVIDIA GPU --------------------------------------------------------
+$nv = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if (-not $SkipGpuCheck -and $nv) {
     try {
-        $null = Invoke-RestMethod -Uri "$Host_/api/generate" -Method Post `
-                                  -Body $body -ContentType "application/json" -TimeoutSec 600
-        Write-Host " done"
-    } catch {
-        Write-Host ""
-        Write-Bad "generation failed for ${probe}: $($_.Exception.Message)"
-        $problems += "generation failed"
-    }
-
-    $ps = Invoke-RestMethod -Uri "$Host_/api/ps" -TimeoutSec 15
-    $entry = $ps.models | Where-Object { $_.name -eq $probe } | Select-Object -First 1
-
-    if (-not $entry) {
-        Write-Warn "/api/ps reported nothing -- the model may have unloaded already."
-        $warnings += "placement unknown"
-    } elseif ($entry.size -gt 0) {
-        $pct = [math]::Round(100.0 * $entry.size_vram / $entry.size, 1)
-        if ($entry.size_vram -le 0) {
-            Write-Bad "0% GPU -- inference is running entirely on the CPU."
-            Write-Host "         This is the CUDA-13-dropped-Pascal failure mode." -ForegroundColor DarkGray
-            Write-Host "         See docs\HARDWARE_NOTES.md. Reinstall the previous Ollama version." -ForegroundColor DarkGray
-            $problems += "GPU not used at all"
-        } elseif ($pct -lt 99.5) {
-            Write-Warn "$pct% GPU -- some layers spilled to system RAM."
-            Write-Host "         Expected for hunter-max. For any other model, lower num_ctx." -ForegroundColor DarkGray
-            $warnings += "partial CPU offload on $probe"
+        $gpu = (& $nv.Source --query-gpu=name,memory.total,memory.used,memory.free,driver_version --format=csv,noheader,nounits -i 0)
+        if ($gpu) {
+            $parts = ($gpu -split ',' | ForEach-Object { $_.Trim() })
+            # name,memTotal(MiB),memUsed(MiB),memFree(MiB),driver
+            $freeGB = [math]::Round([double]$parts[3] / 1024.0, 1)
+            $totalGB = [math]::Round([double]$parts[1] / 1024.0, 1)
+            $usedGB = [math]::Round([double]$parts[2] / 1024.0, 1)
+            Write-Check 'NVIDIA GPU' 'PASS' ("{0} | {1} GB VRAM ({2} GB used, {3} GB free) | driver {4}" -f $parts[0], $totalGB, $usedGB, $freeGB, $parts[4])
+            if ([double]$parts[3] -lt 512) { Write-Check 'VRAM headroom' 'WARN' 'less than 0.5 GB free VRAM - close GPU apps (Epic launcher, browsers) before running benchmarks' }
+            else { Write-Check 'VRAM headroom' 'PASS' "$freeGB GB free" }
         } else {
-            Write-Ok "$pct% GPU -- the card is being used correctly."
+            Write-Check 'NVIDIA GPU' 'WARN' 'nvidia-smi returned no GPU row - running CPU-only?'
         }
+    } catch {
+        Write-Check 'NVIDIA GPU' 'WARN' "nvidia-smi query failed: $($_.Exception.Message)"
+    }
+} elseif (-not $SkipGpuCheck) {
+    Write-Check 'NVIDIA GPU' 'WARN' 'nvidia-smi not on PATH - CUDA tooling missing; Ollama may fall back to CPU'
+} else {
+    Write-Check 'NVIDIA GPU' 'INFO' 'skipped per -SkipGpuCheck'
+}
+
+# --- 4. Python ------------------------------------------------------------
+$py = Get-Command python -ErrorAction SilentlyContinue
+if ($py) {
+    $pyver = (& $py.Source --version 2>&1 | Select-Object -First 1)
+    $ok311 = $pyver -match '3\.(1[1-9]|[2-9][0-9])'
+    Write-Check 'Python' $(if ($ok311) { 'PASS' } else { 'WARN' }) "$pyver at $($py.Source)"
+} else {
+    Write-Check 'Python' 'FAIL' 'python not on PATH - needed for bench.py / refusal-probe.py'
+}
+
+# --- 5. Pulled models -----------------------------------------------------
+if ($serverOk) {
+    try {
+        $tags = Invoke-RestMethod -Uri "$OLLAMA_API/api/tags" -TimeoutSec $ApiTimeoutSec
+        $n = @($tags.models).Count
+        $totalGB = [math]::Round((($tags.models | Measure-Object -Property size -Sum).Sum) / 1GB, 1)
+        Write-Check 'Pulled models' 'PASS' "$n models, ~$totalGB GB on disk"
+    } catch {
+        Write-Check 'Pulled models' 'WARN' "could not query /api/tags: $($_.Exception.Message)"
     }
 }
 
-# ---------------------------------------------------------------------------- Verdict
-Write-Host ""
-if ($problems.Count -gt 0) {
-    Write-Host "FAILED: $($problems -join '; ')" -ForegroundColor Red
-    Write-Host "See docs\TROUBLESHOOTING.md" -ForegroundColor DarkGray
-    exit 1
+# --- 6. Models on disk ----------------------------------------------------
+$modelsDir = Join-Path $env:USERPROFILE '.ollama\models'
+if (Test-Path $modelsDir) {
+    try {
+        $diskBytes = (Get-ChildItem $modelsDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+        Write-Check 'Ollama model store' 'PASS' "$modelsDir ($([math]::Round($diskBytes / 1GB, 1)) GB)"
+    } catch { Write-Check 'Ollama model store' 'WARN' 'could not measure model directory' }
+} else {
+    Write-Check 'Ollama model store' 'WARN' "expected model dir not found: $modelsDir (non-standard OLLAMA_MODELS?)"
 }
-if ($warnings.Count -gt 0) {
-    Write-Host "OK with warnings: $($warnings -join '; ')" -ForegroundColor Yellow
-    exit 0
+
+# --- 7. Currently loaded into memory -------------------------------------
+if ($serverOk) {
+    try {
+        $ps = Invoke-RestMethod -Uri "$OLLAMA_API/api/ps" -TimeoutSec $ApiTimeoutSec
+        if (@($ps.models).Count -eq 0) {
+            Write-Check 'Loaded models' 'INFO' 'none currently resident in memory'
+        } else {
+            foreach ($m in $ps.models) {
+                $vram = [math]::Round($m.size_vram / 1MB, 0)
+                $tot  = [math]::Round($m.size / 1MB, 0)
+                Write-Check 'Loaded models' 'INFO' ("{0}: {1} MB total, {2} MB VRAM" -f $m.name, $tot, $vram)
+            }
+        }
+    } catch { Write-Check 'Loaded models' 'WARN' "could not query /api/ps" }
 }
-Write-Host "All checks passed." -ForegroundColor Green
-exit 0
+
+# --- Summary --------------------------------------------------------------
+Write-Host ''
+$fails = @($results | Where-Object status -eq 'FAIL').Count
+$warns = @($results | Where-Object status -eq 'WARN').Count
+$passes = @($results | Where-Object status -eq 'PASS').Count
+Write-Host ('===== Summary: {0} PASS / {1} WARN / {2} FAIL =====' -f $passes, $warns, $fails) -ForegroundColor Magenta
+if ($fails -gt 0) { Write-Host 'Result: FAIL (fix the FAIL items above before benchmarking)' -ForegroundColor Red }
+elseif ($warns -gt 0) { Write-Host 'Result: HEALTHY WITH WARNINGS (usable, but review non-critical items)' -ForegroundColor Yellow }
+else { Write-Host 'Result: ALL CLEAR' -ForegroundColor Green }
+
+# Persist report next to this script
+$outPath = Join-Path $PSScriptRoot 'doctor-report.json'
+$results | ConvertTo-Json | Set-Content -Path $outPath -Encoding UTF8
+Write-Host "Report saved to $outPath" -ForegroundColor Gray
+exit $exitCode
