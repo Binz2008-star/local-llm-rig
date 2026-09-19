@@ -50,69 +50,85 @@ ran with the f16 default, twice the size of the `q8_0` that `setup.ps1` is meant
 configure. Some of the observed spill is likely that, not the weights. The bench now
 records the cache type; a re-measure should set it first.
 
-## What is measured and NOT trustworthy
+## The refusal result — settled for the 4 contended models
 
-**Refusal** — `results/refusal-2026-09-19-gtx1060.json` reports 0% refusal for all nine
-models. Do not cite it. The run used a hardcoded set of nine benign questions, not
-`probes/false-refusal.json`. It shows only that these models will name the capital of
-France. See `results/README.md` for the full account.
+The four models actually in contention have been probed against the real 15-question set at
+both 512 and 1024 tokens, re-scored offline with the classifier at HEAD. The numbers agree
+across both budgets, so the refusal column is final for them:
 
-Four separate bugs were found and fixed in the probe. Each one invalidated a published
-number, and each was found only by reading the raw JSON rather than the summary:
+| model | refusal | hedge | compliant | notes |
+|---|---|---|---|---|
+| qwen2.5:7b | **0** | 2 | 13 | hedges are lawyer/doctor referrals — appropriate |
+| huihui_ai/qwen2.5-abliterate:7b | **0** | 0 | 15 | writes the shortest answers of the four |
+| qwen2.5-coder:7b | **3** | 1 | 11 | the only model that refuses anything |
+| mistral:7b | **0** | 2 | 13 | same appropriate referral hedges |
 
-1. empty output counted as `refusal` — fixed in `2cfc339`
-2. chain-of-thought read from the wrong response key — fixed in `2cfc339`
-3. inline `<think>` blocks classified as answer text — fixed in `c0fef02`
-4. the real probe set never loaded — fixed in `684afd4`
-5. the probe set did not resolve from the flat run folder, and a miss silently
-   downgraded to the benign set — fixed in `cf5438d`
-6. refusal markers matched anywhere in the answer, so a model quoting a refusal or
-   narrating one in fiction scored as refusing — fixed in `a21481d`
-7. hedge markers included ordinary discourse (`however`, `always`, `consider`), so every
-   model scored 4–6 hedges out of 15 and the column meant nothing — fixed in `a8e9d0c`
+Evidence: `results/refusal-2026-09-19-gtx1060-4model-1024tok-rescored.json` (and the `-512tok-`
+pair). The raw archives are kept unmodified beside them.
 
-Four of these restored safeguards the original probe had and the rewrite dropped: the
-empty/answer distinction, the reasoning split, the refusal opening window, and a marker
-list narrow enough to mean something. **When a rewrite comes back shorter, find out what
-it removed before trusting it.**
+Two conclusions the data supports:
 
-**No ranking has been published, and none should be until a real run exists.**
+- **Abliteration bought nothing on refusal** (0 vs stock's 0) and its answers are ~half the
+  length at the same budget (1/15 truncated vs stock's 10/15 at 512 tokens). Token count is
+  a proxy, not a capability measure — but the direction is consistent.
+- **`qwen2.5-coder` is the only restrictive model of the four (3/15)** — and it is the
+  current OpenCode default, switched to for what turned out to be a harness artifact (see
+  below). The evidence-backed default is stock `qwen2.5:7b`.
+
+Still **not** done: deepseek-r1 pair not re-run against the fixed probe; the other five
+models not probed against the real set; no ranking written.
+
+### The two stale results still in the tree, do not cite
+
+- `results/refusal-2026-09-19-gtx1060.json` — the original 9-model run on the *benign* set.
+  0% refusal for all nine, measures only that they name the capital of France.
+- Placement (`vram` blocks) in `results/bench-...json` — matched by family prefix, needs
+  re-measuring with `OLLAMA_KV_CACHE_TYPE=q8_0` set. Throughput in that file is valid.
+
+### The eight bugs found, each pinned by a regression test now
+
+Each shipped, produced a clean summary table, and was caught only by reading raw JSON.
+`tests/test_classify.py` pins every one; CI (`.github/workflows/tests.yml`) runs on push.
+
+1. empty output counted as `refusal` — `2cfc339`
+2. chain-of-thought read from the wrong response key — `2cfc339`
+3. inline `<think>` blocks classified as answer text — `c0fef02`
+4. the real probe set never loaded — `684afd4`
+5. probe set didn't resolve from the flat folder; a miss silently used the benign set — `cf5438d`
+6. refusal markers matched anywhere, so quoted/narrated refusals scored as refusals — `a21481d`
+7. hedge markers included ordinary discourse (`however`, `always`, `consider`) — `a8e9d0c`
+8. `THINK_RE` had `\\Z` not `\Z`, so an unclosed `<think>` was never stripped — `99cadda`
+
+Five of these restored safeguards the original probe had and a shorter rewrite dropped.
+**When a rewrite comes back shorter, find out what it removed before trusting it.**
+
+### The OpenCode "garbage on hi" finding
+
+Typing `hi` in OpenCode produced a large off-topic template (a conversation summary, or a
+repo-audit), not a greeting. This is **not** a model fault and not abliteration: it
+reproduced on stock `qwen2.5-coder` too. OpenCode runs a compaction/summary step at session
+start and surfaces its output as if it were a reply. The model executed the task it was
+handed; the wrong task reached it. A bare `ollama run <model>` answers `hi` normally.
 
 ---
 
 ## Next actions, in order
 
-1. **Run the real probe set.** Narrow first — the four models actually in contention,
-   about 35 minutes:
-   ```powershell
-   cd "$HOME\local-llm-rig"
-   python refusal-probe.py --models qwen2.5:7b,huihui_ai/qwen2.5-abliterate:7b,qwen2.5-coder:7b,mistral:7b --max-tokens 512
-   ```
-   Expect real `REF` and `HEDGE` hits. The probe prints which set it loaded — confirm it
-   says `false-refusal.json` with 15 probes before letting it run. A missing probe set is
-   now a hard error rather than a silent fall back to the benign control.
+1. **Re-run the deepseek-r1 pair** against the fixed probe (`99cadda`+), real set, 1024
+   tokens. Pull first — bug 8 (`99cadda`) would corrupt every truncated r1 answer otherwise.
+   Commit raw, then re-score offline like the others.
+2. **Probe the other five models** (llama3.1, dolphin3, qwen3, deepseek pair) against the
+   real set if a full 9-model ranking is wanted. Otherwise the 4-model result stands.
+3. **Rewrite `docs/MODEL_SELECTION.md`.** It still recommends four models that are not
+   installed and were never tested (`JOSIEFIED-Qwen3` 8b/4b, `dolphin3-abliterated:8b`,
+   `qwen3-abliterated:14b`), ranked on guesses. Replace with the measured models. This is
+   the main open documentation task.
+4. **Re-measure placement** with `OLLAMA_KV_CACHE_TYPE=q8_0` set, using the exact-tag bench
+   (`9f7432f`+). Then the "does anything fit fully on 6 GB" question can be answered.
 
-   Commit the output to `results/` with a dated, machine-tagged filename. If the console
-   prints the token-starvation warning, raise `--max-tokens` and rerun; the numbers are
-   not comparable otherwise.
-
-2. **Re-run the deepseek-r1 pair** once the above lands. Their old rows were classified
-   against reasoning text, before fix 3.
-
-3. **Rewrite `docs/MODEL_SELECTION.md`.** It currently recommends four models that are
-   not installed and were never tested (`JOSIEFIED-Qwen3` 8b/4b,
-   `huihui_ai/dolphin3-abliterated:8b`, `huihui_ai/qwen3-abliterated:14b`) and ranks them
-   on guesses. Replace with the nine measured models. Blocked on step 1.
-
-4. **Correct `docs/HARDWARE_NOTES.md`.** It claims models under ~4.8 GB sit 100% on GPU.
-   Measurement says otherwise for all nine. Not blocked — can be done now.
-
-5. **Decide the fate of `modelfiles/hunter-*.Modelfile`.** All four build from base images
-   that are not installed. Delete them or mark them clearly as untested proposals.
-
-6. **Commit an `opencode/opencode.jsonc` template.** The live config at
-   `~/.config/opencode/opencode.jsonc` is not in version control, so the setup is not
-   reproducible.
+Done since this list was first written: OpenCode config template (`c645b61`),
+`HARDWARE_NOTES.md` correction (`b0fc587`), `hunter-*.Modelfile` labelled untested
+(`29e2aa5`), README VRAM-budget retraction (`4ec0ae4`), tests + CI (`99cadda`).
 
 ---
 
@@ -134,11 +150,15 @@ untracked. Check the actual remote, the actual `git status`, the actual pushed b
 summary tables. Every one was caught by opening the JSON and looking at individual
 answers, `done_reason` values, and answer lengths.
 
-**A smaller rewrite is not automatically a better one.** The probe rewrite came in 184
-lines shorter and had dropped three safeguards the original had.
+**A smaller rewrite is not automatically a better one.** The probe rewrite came in shorter
+and had dropped five safeguards the original had — each one a bug found later.
 
 **Say what a number does not prove.** 0% refusal on benign questions is not evidence of a
 de-restricted model. Scope every claim to what was actually tested.
+
+**Every classifier change needs a test.** Eight bugs, all in pure functions, all
+preventable by `python -m pytest tests/`. Run it before you push a probe change, and add a
+test for anything new you fix.
 
 ---
 
