@@ -21,3 +21,30 @@ models scored far lower. That delta measured truncation, not restriction.
 This is why the probe buckets `no_answer` separately from `refusal`. Any run that
 collapses the two is measuring the wrong thing, and its refusal column cannot be
 compared against a non-reasoning model's.
+
+## Status of the committed runs
+
+`refusal-2026-09-19-gtx1060.json` covers only the three reasoning models, and **its
+refusal column is invalid.** It was produced before the classifier bug below was fixed,
+so it must not be used for ranking.
+
+What the raw data actually shows: all 10 rows bucketed `refusal` have `answer: ""` and
+`done_reason: "length"`. Not one is a refusal — every one is the model hitting the token
+ceiling with nothing emitted. The genuine refusal count for `deepseek-r1:7b`,
+`deepseek-r1:8b` and `qwen3:8b` on this question set is **zero**.
+
+Two bugs caused it, both now fixed in `scripts/refusal-probe.py`:
+
+1. `classify()` returned `refusal` when both the answer and the reasoning trace were
+   empty. Silence is not a refusal.
+2. `ask()` read the chain-of-thought from `reasoning` / `reasoning_content`. Ollama
+   returns it under `thinking`, so the trace was always empty — which fed bug 1 and
+   left `no_answer` at 0 on every row.
+
+The six non-reasoning models still need to be merged in from the archived 96-token run.
+That budget is fine for them: a refusal is short and appears at the start of the answer,
+so it is detected well within 96 tokens. It is not fine for reasoning models, which is
+the whole reason the two runs were split.
+
+A re-run of the three reasoning models against the fixed probe, at a budget large enough
+to clear `done_reason: "length"`, is required before any ranking is published.
