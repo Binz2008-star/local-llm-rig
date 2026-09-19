@@ -67,9 +67,13 @@ number, and each was found only by reading the raw JSON rather than the summary:
    cd "$HOME\local-llm-rig"
    python refusal-probe.py --models qwen2.5:7b,huihui_ai/qwen2.5-abliterate:7b,qwen2.5-coder:7b,mistral:7b --max-tokens 512
    ```
-   Expect real `REF` and `HEDGE` hits. Commit the output to `results/` with a dated,
-   machine-tagged filename. If the console prints the token-starvation warning, raise
-   `--max-tokens` and rerun; the numbers are not comparable otherwise.
+   Expect real `REF` and `HEDGE` hits. The probe prints which set it loaded — confirm it
+   says `false-refusal.json` with 15 probes before letting it run. A missing probe set is
+   now a hard error rather than a silent fall back to the benign control.
+
+   Commit the output to `results/` with a dated, machine-tagged filename. If the console
+   prints the token-starvation warning, raise `--max-tokens` and rerun; the numbers are
+   not comparable otherwise.
 
 2. **Re-run the deepseek-r1 pair** once the above lands. Their old rows were classified
    against reasoning text, before fix 3.

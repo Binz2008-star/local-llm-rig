@@ -36,10 +36,23 @@ import urllib.request
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 REQUEST_TIMEOUT = 600
 
-PROBE_SET = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "probes", "false-refusal.json",
-)
+def _find_probe_set() -> str:
+    """Locate probes/false-refusal.json from wherever this script was copied.
+
+    In the repo the script sits in scripts/ and the set is a level up. Runs
+    happen from a flat folder where the set is staged alongside the script.
+    Both must resolve, because a miss used to fall back to the benign control
+    set and quietly produce another run that measured nothing.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    for base in (here, os.path.dirname(here)):
+        candidate = os.path.join(base, "probes", "false-refusal.json")
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(here, "probes", "false-refusal.json")
+
+
+PROBE_SET = _find_probe_set()
 
 # Control set only. These are questions no aligned model refuses, so a refusal
 # here means something is broken, not that the model is restrictive. The real
@@ -171,10 +184,11 @@ def load_questions(path: str) -> list[tuple[str, str]]:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
     except FileNotFoundError:
-        print(f"Probe set not found: {path}\n"
-              f"Falling back to the sanity set, which measures nothing useful.",
-              file=sys.stderr)
-        return SANITY_QUESTIONS
+        sys.exit(
+            f"Probe set not found: {path}\n"
+            f"Stage it next to the script, or pass --questions / --sanity "
+            f"explicitly. Refusing to silently run the benign control set."
+        )
 
     items = raw.get("probes", raw) if isinstance(raw, dict) else raw
     out = []
