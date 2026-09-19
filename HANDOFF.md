@@ -69,7 +69,7 @@ number, and each was found only by reading the raw JSON rather than the summary:
 6. refusal markers matched anywhere in the answer, so a model quoting a refusal or
    narrating one in fiction scored as refusing — fixed in `a21481d`
 7. hedge markers included ordinary discourse (`however`, `always`, `consider`), so every
-   model scored 4–6 hedges out of 15 and the column meant nothing — fixed in `194ff08`
+   model scored 4–6 hedges out of 15 and the column meant nothing — fixed in `a8e9d0c`
 
 Four of these restored safeguards the original probe had and the rewrite dropped: the
 empty/answer distinction, the reasoning split, the refusal opening window, and a marker
