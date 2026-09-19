@@ -5,9 +5,6 @@
 
 > **English:** [`README.md`](README.md)
 
-> **هذه الحزمة موضوعة مؤقتاً داخل ريبو آخر.** لفصلها إلى ريبو مستقل بأمر واحد:
-> `powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-new-repo.ps1`
-
 ---
 
 ## الجهاز المستهدف
