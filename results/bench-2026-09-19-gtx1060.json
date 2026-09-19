@@ -1,0 +1,176 @@
+{
+  "generated_at": "2026-09-19T13:52:50",
+  "results": [
+    {
+      "model": "deepseek-r1:7b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 347,
+      "eval_count": 128,
+      "prompt_tok_s": 84.17,
+      "gen_tok_s": 22.16,
+      "ttft_ms": 4122.4,
+      "total_ms": 9915.2,
+      "cold_load_ms": 17468.9,
+      "wall_warmup_s": 18.08,
+      "wall_timed_s": 9.94,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4418.0,
+        "total_mb": 4879.0
+      }
+    },
+    {
+      "model": "deepseek-r1:8b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 347,
+      "eval_count": 128,
+      "prompt_tok_s": 102.59,
+      "gen_tok_s": 10.22,
+      "ttft_ms": 3382.3,
+      "total_ms": 15941.9,
+      "cold_load_ms": 19808.3,
+      "wall_warmup_s": 20.81,
+      "wall_timed_s": 15.96,
+      "vram": {
+        "in_vram": null,
+        "vram_mb": null,
+        "total_mb": null
+      }
+    },
+    {
+      "model": "dolphin3:8b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 367,
+      "eval_count": 128,
+      "prompt_tok_s": 160.28,
+      "gen_tok_s": 13.34,
+      "ttft_ms": 2289.7,
+      "total_ms": 68097.9,
+      "cold_load_ms": 64415.8,
+      "wall_warmup_s": 65.12,
+      "wall_timed_s": 68.11,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4320.0,
+        "total_mb": 5349.0
+      }
+    },
+    {
+      "model": "huihui_ai/qwen2.5-abliterate:7b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 373,
+      "eval_count": 125,
+      "prompt_tok_s": 169.9,
+      "gen_tok_s": 23.81,
+      "ttft_ms": 2195.4,
+      "total_ms": 7468.1,
+      "cold_load_ms": 20942.7,
+      "wall_warmup_s": 21.34,
+      "wall_timed_s": 7.47,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4418.0,
+        "total_mb": 4879.0
+      }
+    },
+    {
+      "model": "llama3.1:8b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 354,
+      "eval_count": 128,
+      "prompt_tok_s": 156.89,
+      "gen_tok_s": 12.84,
+      "ttft_ms": 2256.3,
+      "total_ms": 12246.3,
+      "cold_load_ms": 19744.1,
+      "wall_warmup_s": 20.34,
+      "wall_timed_s": 12.27,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4320.0,
+        "total_mb": 5349.0
+      }
+    },
+    {
+      "model": "mistral:7b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 376,
+      "eval_count": 128,
+      "prompt_tok_s": 170.83,
+      "gen_tok_s": 18.63,
+      "ttft_ms": 2201.0,
+      "total_ms": 9088.4,
+      "cold_load_ms": 21393.4,
+      "wall_warmup_s": 21.85,
+      "wall_timed_s": 9.09,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4437.0,
+        "total_mb": 4826.0
+      }
+    },
+    {
+      "model": "qwen2.5-coder:7b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 373,
+      "eval_count": 128,
+      "prompt_tok_s": 171.93,
+      "gen_tok_s": 23.3,
+      "ttft_ms": 2169.5,
+      "total_ms": 7684.3,
+      "cold_load_ms": 24035.2,
+      "wall_warmup_s": 24.4,
+      "wall_timed_s": 7.69,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4418.0,
+        "total_mb": 4879.0
+      }
+    },
+    {
+      "model": "qwen2.5:7b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 373,
+      "eval_count": 128,
+      "prompt_tok_s": 172.84,
+      "gen_tok_s": 23.8,
+      "ttft_ms": 2158.1,
+      "total_ms": 7553.8,
+      "cold_load_ms": 18004.5,
+      "wall_warmup_s": 18.37,
+      "wall_timed_s": 7.56,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4418.0,
+        "total_mb": 4879.0
+      }
+    },
+    {
+      "model": "qwen3:8b",
+      "prompt_tokens_requested": 512,
+      "gen_tokens_requested": 128,
+      "prompt_eval_count": 354,
+      "eval_count": 128,
+      "prompt_tok_s": 145.33,
+      "gen_tok_s": 11.06,
+      "ttft_ms": 2435.8,
+      "total_ms": 14025.3,
+      "cold_load_ms": 18707.1,
+      "wall_warmup_s": 19.76,
+      "wall_timed_s": 14.03,
+      "vram": {
+        "in_vram": false,
+        "vram_mb": 4392.0,
+        "total_mb": 5685.0
+      }
+    }
+  ]
+}
