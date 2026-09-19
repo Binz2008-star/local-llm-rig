@@ -16,9 +16,16 @@ Pascal-era 6 GB GPU. Nothing here calls a cloud API — every model runs on your
 | GPU | NVIDIA GTX 1060 6 GB (Pascal, CC 6.1, 192 GB/s) | **6 GB VRAM is the hard limit.** Bandwidth, not compute, sets tokens/sec. |
 | OS | Windows 11 Pro | Ollama native Windows build. |
 
-The single number that decides everything: **~5.0–5.3 GB of usable VRAM** after Windows
-WDDM and the desktop compositor take their cut. A model file bigger than that gets split
-across GPU and CPU, and throughput falls off a cliff.
+VRAM is the binding constraint, and less of it is usable than the sticker says: Windows
+WDDM, the desktop compositor, the CUDA context and the KV cache all take a cut before a
+single weight is loaded. A model that does not fit gets split across GPU and CPU, and
+throughput falls off a cliff.
+
+**Do not trust a budget figure from a guide, including an earlier version of this one.**
+An estimate here of ~5.0–5.3 GB usable proved optimistic: every 7–8B Q4 model tested on
+this card reported a partial CPU split at 4.3–4.4 GB of weights. That measurement has its
+own known bug and is being redone — see [`results/README.md`](results/README.md). Measure
+your own card with `ollama ps` and trust that over any table.
 
 ---
 
