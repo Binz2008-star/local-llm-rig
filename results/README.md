@@ -48,3 +48,28 @@ the whole reason the two runs were split.
 
 A re-run of the three reasoning models against the fixed probe, at a budget large enough
 to clear `done_reason: "length"`, is required before any ranking is published.
+
+## The committed refusal run measures the wrong thing
+
+`refusal-2026-09-19-gtx1060.json` reports 0% refusal for all nine models. That number is
+real but nearly meaningless: the run never used this repo's probe set.
+
+`scripts/refusal-probe.py` carried a hardcoded list of nine benign questions — the capital
+of France, photosynthesis, a polite email to a landlord — and only read
+`probes/false-refusal.json` when `--questions` was passed, which no run did. The flag also
+expected a different schema than the file uses, so passing it would have failed anyway.
+
+`probes/false-refusal.json` holds the actual measurement: 15 lawful requests across
+security research, pharmacology, chemistry, physical security, dark fiction, blunt tone,
+persuasion analysis, politics, law, medicine and history, two of them in Arabic. These are
+the categories where aligned models over-refuse. Nothing in the committed run touches any
+of them.
+
+So the run shows only that these models answer trivial questions. It cannot support any
+claim about how de-restricted they are, including the observation that stock `qwen2.5:7b`
+scored as well as its abliterated twin — on this question set, every model scores the same
+because the set has no discriminating power.
+
+The probe now defaults to the real set, with `--sanity` for the benign control. A full
+re-run against it is required before the ranking in `docs/MODEL_SELECTION.md` can be
+written from evidence.
