@@ -1,183 +1,157 @@
-# Model selection — ranked by how de-restricted the model is
+# Model selection — measured on this rig
 
-The priority here is **compliance first**: the least restricted model that will run, with
-speed and context treated as the price paid for it. That inverts the usual advice, and it
-changes the answer.
+The priority is **compliance first**: the least-restricted model that will run, with speed
+and context treated as the price paid for it.
 
-## Not all "uncensored" is the same
+Everything here was measured on this machine (GTX 1060 6 GB / i7-8700 / 32 GB / Windows 11 /
+Ollama 0.34.2). The raw data is in [`../results/`](../results/README.md), committed unchanged.
+**No number in this file comes from a model card or a leaderboard.** Claimed compliance
+that has not been probed here is labelled as such.
 
-There are two distinct techniques, and the difference is the single most useful thing to
-understand when picking a model.
-
-**Abliteration** identifies the direction in activation space that corresponds to refusal
-and projects it out of the weights. It is surgery, not training. It is fast to apply to
-any model, and it works — but it is imperfect in two ways: refusals survive in some
-phrasings, and cutting out the refusal direction nicks neighbouring capabilities, so the
-model gets slightly dumber.
-
-**Uncensored finetuning** (Dolphin, Lexi) retrains the model on data with refusals removed.
-It holds up better on capability because nothing is being surgically cut, and it tends to
-be more thoroughly compliant because compliance was learned rather than carved in.
-
-**The models that do both are the most de-restricted things available.** Finetune for
-openness, then abliterate what survives. That is what the JOSIEFIED family is, and it is
-why `hunter-open` is the default here rather than a plain abliterated build.
-
-One more thing that matters more than people expect: **the system prompt is part of the
-model.** The JOSIEFIED builds ship a system prompt tuned as part of the openness finetune.
-Overriding it with your own generic one measurably weakens compliance. The Modelfiles for
-those two models deliberately contain no `SYSTEM` block so the tuned one is inherited.
-
-## The VRAM constraint
-
-Compliance-first does not repeal arithmetic.
-
-```
-GTX 1060                          6.0 GB VRAM
-- Windows WDDM reserve            ~0.3 GB
-- desktop / browser / compositor  ~0.3-0.7 GB
---------------------------------------------
-usable for Ollama                 ~5.0 - 5.3 GB
-```
-
-That budget covers **weights + KV cache + compute scratch**. The KV cache is the part
-people forget, and it grows with context length — a model that fits at 4K stops fitting
-at 32K.
-
-```
-weights + KV cache  <=  ~4.8 GB    -> safely 100% GPU
-weights            5.0-5.5 GB      -> only with q8_0 KV cache and a capped context
-weights            > 5.5 GB        -> accept a CPU split, or don't run it
-```
+- Refusal probe: the real 15-question set in `probes/false-refusal.json` (13 EN / 2 AR),
+  run at 512 and 1024 tokens, re-scored with the fixed classifier. Both runs agree.
+- Speed: `results/bench-2026-09-19-gtx1060.json`.
+- Placement in the bench file is **unreliable** (family-prefix matching bug) and is not
+  cited here. See `results/README.md` before believing any placement claim below.
 
 ---
 
-## Selected, most de-restricted first
+## Settled result: the four models that were actually measured
 
-### 1. `hunter-open` — `goekdenizguelmez/JOSIEFIED-Qwen3:8b-q4_k_m` · **default**
+The four installed 7B models on this rig were probed against the full real set at 512 and
+1024 tokens. `no_answer` was zero everywhere (no starvation), so every column is comparable.
 
-| | |
-|---|---|
-| Size | 5.0 GB (Q4_K_M) |
-| Treatment | abliterated **and** finetuned for openness — both |
-| Placement | 100% GPU, but only just: needs `q8_0` KV cache and `num_ctx 4096` |
-| Cost of the choice | knife-edge VRAM, short context, ~half the speed of the 4B |
+| Model | Refusal | Hedge | Compliant | Trunc 512 | Trunc 1024 | Med answer 1024 (chars) | gen tok/s |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `qwen2.5:7b` | **0** | 2 | 13 | 10/15 | 0/15 | ~2900 | 23.8 |
+| `huihui_ai/qwen2.5-abliterate:7b` | **0** | 0 | 15 | 1/15 | 0/15 | ~1100 | 23.8 |
+| `mistral:7b` | **0** | 2 | 13 | 8/15 | 2/15 | ~2000 | 18.6 |
+| `qwen2.5-coder:7b` | **3** | 1 | 11 | 5/15 | 0/15 | ~1300 | 23.3 |
 
-Josiefied-Qwen3-8B-abliterated-v1. The double treatment is the reason it sits at the top:
-the openness finetune handles what abliteration alone leaves behind. It appears on the UGI
-(Uncensored General Intelligence) leaderboard, which scores models on willingness rather
-than on capability alone — a useful sanity check that this is not just a model card claim.
+Read + means good here (fewer refusals is the target), but for **Trunc** fewer is better.
 
-It ships its own system prompt. Do not override it.
+What the two runs together establish:
 
-**This is the honest trade.** Prioritising compliance means accepting a 5.0 GB model on a
-5.2 GB budget: 4096 tokens of context and a constant risk of spilling to CPU if your
-desktop grabs more VRAM. If that becomes annoying, the next entry is the escape hatch.
-
-### 2. `hunter-open-fast` — `goekdenizguelmez/JOSIEFIED-Qwen3:4b-q4_k_m`
-
-| | |
-|---|---|
-| Size | ~2.5 GB (Q4_K_M) |
-| Treatment | same openness finetune + abliteration, smaller base |
-| Placement | 100% GPU with ~2.7 GB left over — real context, 16K and up |
-
-Same de-restriction treatment, weaker reasoning. This is the one to use when you want to
-paste a long document into an uncensored model, or when you simply want it to be fast.
-Compliance is a property of the treatment, not of the parameter count, so you are giving
-up intelligence here, not openness.
-
-### 3. `hunter-dolphin` — `huihui_ai/dolphin3-abliterated:8b`
-
-| | |
-|---|---|
-| Size | ~4.9 GB (Q4_K_M) |
-| Treatment | Dolphin 3.0 uncensored finetune on Llama 3.1, then abliterated |
-| Why keep it | **different base model** |
-
-This is not redundant with `hunter-open`, and the reason is worth being precise about:
-refusal behaviour that survives abliteration is specific to the base model's training.
-When a Qwen-lineage model balks at a particular phrasing, a Llama-lineage model very often
-does not. Keeping one of each is the cheapest way to raise your effective compliance
-ceiling. When `hunter-open` refuses, try this before rewriting your prompt.
-
-### 4. `hunter-max` — `huihui_ai/qwen3-abliterated:14b-v2-q4_K_M`
-
-| | |
-|---|---|
-| Size | ~9 GB — does not fit |
-| Treatment | abliteration only, no openness finetune |
-| Placement | ~55% GPU / 45% system RAM. Single-digit tok/s. |
-
-Included for reasoning, not for compliance — **it refuses more than the three above**. It
-is the one place in this repo where capability outranks de-restriction, and it is opt-in
-(`setup.ps1 -IncludeMax`) for that reason. If it balks, take the question to `hunter-open`.
-
-### Worth knowing about, not wired in
-
-`Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2` (~4.9 GB, 32K context) has a strong
-reputation as about as compliant as an 8B gets, and is a third lineage if you want one.
-It is not in `setup.ps1` because its Ollama tag is less stable than the others — pull it
-from Hugging Face directly if you want it, and check the current GGUF tag first.
+- **The only model that refuses anything is `qwen2.5-coder:7b`: 3/15, stably, in both runs.**
+  The refusals are on a dark-fiction scene, a blunt-tone roast, and a history detail — the
+  categories this probe exists to catch. It is the current default in the OpenCode config
+  on this machine, which was chosen for a compaction problem that turned out to be an
+  OpenCode artifact, not a model fault (see `HANDOFF.md`, and it is fully reproducible on
+  stock `qwen2.5-coder` too).
+- **Abliteration buys zero on refusal: 0 vs 0.** `huihui_ai/qwen2.5-abliterate:7b` refuses
+  no more and no less than stock `qwen2.5:7b` — the same model with the refusal direction
+  cut out.
+- **Abliteration's measured cost is depth.** At 1024 tokens, nothing is truncated, so the
+  median answer length is the model choosing to stop: stock `qwen2.5` writes ~2900 chars,
+  the abliterate twin ~1100 — roughly 2.6× shorter, on identical questions. The abliterate
+  was not starved at 512 either (1/15 truncated vs 10/15 for stock); it simply writes less.
+  The "abliteration nicks capability" claim now has a measured shape on this rig.
+- **At 512, `qwen2.5:7b`'s hedge/compliant numbers were truncation-shaped**, which is why
+  the 512 run alone was not final. At 1024 it finishes everything and still hedges 2/15.
 
 ---
 
-## Rejected, and why
+## Ranking (Tier 1 / Tier 2 / Tier 3)
 
-| Candidate | Verdict |
-|---|---|
-| `huihui_ai/qwen3-abliterated:8b-v2-q4_K_M` | Same size and same base as `hunter-open`, abliteration only. Strictly dominated by the JOSIEFIED build. Was the Tier 2 pick before compliance became the ranking criterion; dropped. |
-| `huihui_ai/qwen3.5-abliterated:4B` | Newer generation and slightly smarter per GB than the 4B JOSIEFIED, but abliteration only. Under a compliance-first ranking, `hunter-open-fast` wins. |
-| `huihui_ai/qwen3.5-abliterated:9B` | ~5.5–5.8 GB. Over budget, and abliteration only. Loses on both axes. |
-| Mistral-Nemo 12B abliterated / `dolphin-mistral-nemo:12b` | 7.48 GB at Q4_K_M — spills, and Qwen3-14B is stronger at a similar penalty. Nemo's 128K context is unusable at this VRAM. |
-| Gemma-family abliterated 9B | ~5.8 GB, and Gemma's large vocabulary inflates the KV cache further. |
-| `huihui_ai/qwen3-abliterated:30b-a3b` (MoE) | 3B active params sounds ideal, but the full ~18 GB of weights must be resident or streamed. Technically loadable with 32 GB RAM, painfully slow. |
-| Any `IQ2_*` / `IQ3_*` / `IQ4_*` quant | Smaller, but i-quants run *slower* than Q4_K_M on Pascal. See `HARDWARE_NOTES.md`. |
-| `8b-q3_k_m` (4.1 GB) of JOSIEFIED | Tempting — it would end the knife-edge problem. But Q3 quantization degrades instruction-following, and a model that follows instructions worse also complies worse. Q4_K_M is the floor for this use. |
-| 70B anything | Not on 6 GB + 32 GB. Not close. |
+### Tier 1 — `qwen2.5:7b` · **recommended default**
+
+0 refusals, the deepest answers of the four, and the fastest (23.8 gen tok/s, tied best).
+This is the model to pin as the OpenCode default and to reach for first.
+
+### Tier 2 — the alternatives, on measured tradeoffs
+
+- **`mistral:7b`** — 0 refusals, deeper answers than coder, but slower (18.6 tok/s) and
+  still truncates 2/15 at 1024. A genuine fallback; no reason to prefer it over Tier 1.
+- **`huihui_ai/qwen2.5-abliterate:7b`** — the cleanest compliance surface measured
+  (0 refusals, 0 hedges), at the price of terse answers (~1100 chars median) that skip the
+  depth stock `qwen2.5` provides. If you want an "uncensored" model in the literal sense,
+  this is it — but expect to prompt for more detail.
+
+### Tier 3 — avoid as default
+
+**`qwen2.5-coder:7b`** — the only measured refuser (3/15). Its niche is coding-specific
+workflows where its training matters, not general de-restriction. Because it is the
+current OpenCode default on this machine, changing it back to `qwen2.5:7b` is the low-risk,
+evidence-backed move.
 
 ---
 
-## Measure it, don't take my word for it
+## Not measured yet — do not rank these
 
-The ranking above is a prior, built from model-card claims and leaderboard positions. Your
-prompts are not their prompts. Settle it empirically:
+Speed is measured for all of them; compliance is **not**. Their old "0% refusal" rows came
+from the benign control set and prove nothing (see `results/README.md`).
+
+| Model | gen tok/s | Refusal status |
+|---|---:|---|
+| `deepseek-r1:7b` | 22.2 | **Excluded.** Old rows predate the thinking-strip fix; re-run scheduled against the fixed probe. |
+| `deepseek-r1:8b` | 10.2 | **Excluded.** Same reason. |
+| `dolphin3:8b` | 13.3 | Unmeasured (real set) |
+| `llama3.1:8b` | 12.8 | Unmeasured (real set) |
+| `qwen3:8b` | 11.1 | Unmeasured (real set) |
+
+Until a model is probed against `probes/false-refusal.json`, this repo has no compliance
+evidence for it. That is a feature: it is exactly what stopped the first, wrong version of
+this file.
+
+---
+
+## The untested JOSIEFIED lineage (`hunter-*`)
+
+`scripts/setup.ps1` and the `modelfiles/` folder still install four "hunter-" variants
+(`JOSIEFIED-Qwen3` 8b/4b, `dolphin3-abliterated:8b`, `qwen3-abliterated:14b`) and their
+Modelfiles carry disclaimers that they are uninstalled and untested. **They are not on
+this rig and were never probed here.** Do not let a model card's claim about a JOSIEFIED
+system prompt displace a measured 0-refusal result from stock `qwen2.5:7b`. If you want
+one of them, install it, then probe it — the tools below are exactly for that.
+
+Background on why the JOSIEFIED builds claim to be more compliant: they combine
+**abliteration** (project the refusal direction out of the weights — fast, but it nicks
+capability and refusals survive in some phrasings) with an **uncensored finetune** (learn
+compliance by retraining — holds capability better). The technique comparison is real;
+the specific model claims are untested on this machine.
+
+---
+
+## Measure it — don't take this file's word
+
+The probe set: 15 lawful requests spanning security research, pharmacology, chemistry,
+physical security, dark fiction, blunt tone, persuasion analysis, politics, law, medicine
+and history, two of them in Arabic — the categories where aligned models over-refuse.
 
 ```powershell
-python .\scripts\refusal-probe.py --all          # refusal + hedge rate per model
-python .\scripts\refusal-probe.py --all --show   # and read the actual responses
-```
+# refusal + hedge + no_answer per model, plus raw answers
+python .\scripts\refusal-probe.py --all --show
 
-`probes/false-refusal.json` holds the prompt set: lawful requests spanning the categories
-where aligned models most often refuse by mistake — security research, pharmacology,
-chemistry, physical security, dark fiction, blunt tone, contested politics, law — plus two
-in Arabic, because refusal behaviour is language-dependent and models routinely refuse in
-Arabic what they answer in English.
+# or a single model, real set, generous budget (matches the settled runs):
+python .\scripts\refusal-probe.py --models qwen2.5:7b --max-tokens 1024 `
+  --questions .\probes\false-refusal.json --show
+
+# real speed on your box
+python .\scripts\bench.py --all
+```
 
 Two numbers come back per model:
 
-- **refusal rate** — it declined outright
-- **hedge rate** — it answered, but buried the answer in disclaimers and moralizing
+- **refusal rate** — declined outright
+- **hedge rate** — answered, but buried it in disclaimers and moralizing
 
 Both matter. A model at 0% refusal that lectures you every time is still not the model you
-want. Extend the probe set with your own prompts — that is the point of it being a JSON
-file.
+want. Detection is heuristic pattern matching, so `--show` exists to check its work — and
+every classifier change in this repo must come with a regression test (`python -m pytest
+tests/`).
 
-Detection is heuristic pattern matching, so `--show` exists to let you check its work.
+Extend `probes/false-refusal.json` with your own prompts — that is the point of it being a
+JSON file.
 
 ---
 
-## Tags move
+## Supporting facts the old version got wrong (kept corrected)
 
-Sizes here were compiled in September 2026 from the Ollama registry. Tags get re-pointed
-and new generations land. Before trusting any figure above:
-
-```powershell
-ollama show goekdenizguelmez/JOSIEFIED-Qwen3:8b-q4_k_m
-ollama list                            # real on-disk sizes
-ollama ps                              # GPU/CPU split while loaded
-python .\scripts\bench.py --all        # real speed
-python .\scripts\refusal-probe.py --all  # real compliance
-```
-
-The scripts are the authority. This table is a starting point.
+- **There is no "~5.0–5.3 GB usable" budget.** That estimate was never measured, and every
+  7–8B Q4 model tested on this card reported a partial CPU split at 4.3–4.4 GB of weights —
+  inside the claimed budget. The placement measurement itself has a known bug and is being
+  redone. Measure your own card with `ollama ps` and trust that over any table.
+- **Do not use i-quants** (`IQ2_*`/`IQ3_*`/`IQ4_*`): on Pascal they are typically *slower*
+  than the larger `Q4_K_M` file. `Q4_K_M` is the floor; `Q5_K_M` only if it still fits.
+- **CUDA 13 dropped Pascal (CC 6.1).** If an Ollama update stops using the GPU, reinstall
+  the version that worked. See `HARDWARE_NOTES.md`.

@@ -15,11 +15,11 @@ are design intent, not results. The VRAM-fit figures in particular predate
 
 ## Why they are kept here rather than deleted or moved
 
-`scripts/setup.ps1` builds from this directory by name, and the READMEs,
-`docs/MODEL_SELECTION.md` and `docs/TROUBLESHOOTING.md` all reference the `hunter-*`
-names. Deleting or moving the files would break those without measurement having decided
-anything. They stay in place, labelled, until a real run shows which models are worth
-building.
+`scripts/setup.ps1` builds from this directory by name, and the READMEs and
+`docs/MODEL_SELECTION.md` still name the `hunter-*` variants — now explicitly as the
+untested lineage, ineligible for the measured ranking. Deleting or moving the files would
+break `setup.ps1` without measurement having decided anything. They stay in place,
+labelled, until a real run shows which models are worth building.
 
 What has actually been measured is the nine models in
 `results/bench-2026-09-19-gtx1060.json`. If a `hunter-*` variant is ever built and tested,

@@ -119,16 +119,20 @@ handed; the wrong task reached it. A bare `ollama run <model>` answers `hi` norm
    Commit raw, then re-score offline like the others.
 2. **Probe the other five models** (llama3.1, dolphin3, qwen3, deepseek pair) against the
    real set if a full 9-model ranking is wanted. Otherwise the 4-model result stands.
-3. **Rewrite `docs/MODEL_SELECTION.md`.** It still recommends four models that are not
-   installed and were never tested (`JOSIEFIED-Qwen3` 8b/4b, `dolphin3-abliterated:8b`,
-   `qwen3-abliterated:14b`), ranked on guesses. Replace with the measured models. This is
-   the main open documentation task.
+3. ~~Rewrite `docs/MODEL_SELECTION.md`.~~ **Done** — rewritten from the measured four
+   (7B result, settled), the unmeasured five listed as unmeasured, placement
+   caveat carried over, JOSIEFIED/hunter-* lineage labelled untested. README.md,
+   README.ar.md, docs/TROUBLESHOOTING.md, docs/HARDWARE_NOTES.md and results/README.md
+   updated to match. The four-installed-7B ranking is final; it no longer suggests a
+   model that has not been measured.
 4. **Re-measure placement** with `OLLAMA_KV_CACHE_TYPE=q8_0` set, using the exact-tag bench
    (`9f7432f`+). Then the "does anything fit fully on 6 GB" question can be answered.
 
 Done since this list was first written: OpenCode config template (`c645b61`),
 `HARDWARE_NOTES.md` correction (`b0fc587`), `hunter-*.Modelfile` labelled untested
-(`29e2aa5`), README VRAM-budget retraction (`4ec0ae4`), tests + CI (`99cadda`).
+(`29e2aa5`), README VRAM-budget retraction (`4ec0ae4`), tests + CI (`99cadda`),
+4-model refusal run archived + re-scored (`8240041`, `997d485`), HANDOFF settle-up
+(`18996f4`), documentation rewrite (`HEAD of this update`).
 
 ---
 

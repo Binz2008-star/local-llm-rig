@@ -8,8 +8,12 @@ Each run records the machine it came from, because every number is hardware-boun
 
 | File | Machine | Notes |
 |---|---|---|
-| `bench-2026-09-19-gtx1060.json` | GTX 1060 6GB / i7-8700 / 32GB | 512-token budget |
-| `refusal-2026-09-19-gtx1060.json` | same | v2 probe, separate `no_answer` bucket |
+| `bench-2026-09-19-gtx1060.json` | GTX 1060 6GB / i7-8700 / 32GB | 512-token budget; placement rows unreliable |
+| `refusal-2026-09-19-gtx1060.json` | same | superseded — benign set, measures nothing |
+| `refusal-2026-09-19-gtx1060-4model-512tok.json` | same | raw real-set run, 4 models, 512 tokens |
+| `refusal-2026-09-19-gtx1060-4model-512tok-rescored.json` | same | same run, re-scored with fixed classifier |
+| `refusal-2026-09-19-gtx1060-4model-1024tok.json` | same | raw real-set run, 4 models, 1024 tokens |
+| `refusal-2026-09-19-gtx1060-4model-1024tok-rescored.json` | same | same run, re-scored with fixed classifier |
 
 ## Reading the refusal numbers
 
@@ -41,13 +45,23 @@ Two bugs caused it, both now fixed in `scripts/refusal-probe.py`:
    returns it under `thinking`, so the trace was always empty — which fed bug 1 and
    left `no_answer` at 0 on every row.
 
-The six non-reasoning models still need to be merged in from the archived 96-token run.
-That budget is fine for them: a refusal is short and appears at the start of the answer,
-so it is detected well within 96 tokens. It is not fine for reasoning models, which is
-the whole reason the two runs were split.
+Four of the non-reasoning models (qwen2.5, its abliterated twin, mistral, qwen2.5-coder)
+now have dedicated raw runs in this folder. `llama3.1:8b` and `dolphin3:8b` remain
+unmeasured against the real set.
 
-A re-run of the three reasoning models against the fixed probe, at a budget large enough
-to clear `done_reason: "length"`, is required before any ranking is published.
+The three reasoning models have not been re-run against the fixed probe at a budget large
+enough to clear `done_reason: "length"` either.
+
+A re-run of the three reasoning models (`deepseek-r1:7b`, `deepseek-r1:8b`, `qwen3:8b`)
+against the fixed probe, at a budget large enough to clear `done_reason: "length"`, is
+still open — none of them has valid refusal data against the real set.
+
+**The contended models, however, are settled.** The four installed 7B models were probed
+against the real set at 512 and 1024 tokens; the runs agree and the result is final —
+see `refusal-2026-09-19-gtx1060-4model-*` above and
+[`docs/MODEL_SELECTION.md`](../docs/MODEL_SELECTION.md). The deepseek-r1 pair is excluded
+from ranking (rows predate the thinking-strip fix); re-running them is one of the two
+remaining gaps in the refusal table.
 
 ## The committed refusal run measures the wrong thing
 
@@ -70,9 +84,9 @@ claim about how de-restricted they are, including the observation that stock `qw
 scored as well as its abliterated twin — on this question set, every model scores the same
 because the set has no discriminating power.
 
-The probe now defaults to the real set, with `--sanity` for the benign control. A full
-re-run against it is required before the ranking in `docs/MODEL_SELECTION.md` can be
-written from evidence.
+The probe now defaults to the real set, with `--sanity` for the benign control. The ranking
+in `docs/MODEL_SELECTION.md` is now written from the measured four models, with the
+unmeasured five explicitly listed as unmeasured rather than ranked.
 
 ## Placement data in the bench run is unreliable
 

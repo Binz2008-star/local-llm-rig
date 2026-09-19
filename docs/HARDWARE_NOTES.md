@@ -88,8 +88,9 @@ Two things follow:
 
 ## 6. When layers spill, the CPU side becomes the bottleneck
 
-For `hunter-max`, the ~45% of layers living in system RAM are limited by DDR4 bandwidth
-(roughly 40 GB/s dual-channel) and by the i7-8700's AVX2 throughput. Two things help:
+The models measured on this rig all spilled at least some layers (section 8), and the
+system-RAM portion is limited by DDR4 bandwidth (roughly 40 GB/s dual-channel) and by the
+i7-8700's AVX2 throughput. Two things help:
 
 - **Confirm your RAM is running in dual-channel.** Two sticks in the correct slots. A
   32 GB single-stick configuration halves memory bandwidth and roughly halves your
@@ -101,7 +102,7 @@ For `hunter-max`, the ~45% of layers living in system RAM are limited by DDR4 ba
 
 - **Don't let the 1060 drive a 4K monitor while inferencing** if you can avoid it. Desktop
   composition at high resolution can cost several hundred MB of VRAM — which is exactly
-  the margin Tier 2 is operating on.
+  the margin a 7B model is operating on (measured: ~4.3-4.4 GiB reached the GPU, section 8).
 - Close the browser before running Tier 2. Modern browsers with hardware acceleration
   routinely hold 500 MB+ of VRAM.
 - Check the real free VRAM before loading:
@@ -112,6 +113,14 @@ For `hunter-max`, the ~45% of layers living in system RAM are limited by DDR4 ba
   turns a 9 GB Tier 3 load from minutes into seconds.
 
 ## 8. Measured VRAM placement (corrects an earlier estimate)
+
+**Caveat before you read the table: the per-model placement rows below are suspect.** The
+bench that produced them (`results/bench-2026-09-19-gtx1060.json`) matched the loaded
+model by *family prefix*, so a placement row can belong to a different model entirely
+(`qwen2.5` could pick up `qwen2.5-coder`'s numbers, `deepseek-r1:7b` the `:8b`'s), and
+`deepseek-r1:8b` has no placement at all. The same run also predates recording
+`OLLAMA_KV_CACHE_TYPE` (unset, so f16 cache). Treat the **throughput column** as valid and
+the **placement rows as wrong-until-re-measured**; read the overall picture, not each row.
 
 An earlier version of these notes, and of the README and model-selection doc, assumed
 ~5.0-5.3 GB of usable VRAM and that models of about 4.8 GB or less would sit 100% on the

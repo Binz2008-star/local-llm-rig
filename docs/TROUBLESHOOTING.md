@@ -4,12 +4,15 @@
 
 The model did not fit. In order of what to try:
 
-1. Lower `num_ctx` in the Modelfile and rebuild (`ollama create hunter-open -f modelfiles\hunter-open.Modelfile`).
-2. Confirm `OLLAMA_KV_CACHE_TYPE=q8_0` is actually set in the *service's* environment —
-   `setx` only affects new processes, so you must restart Ollama (see below).
-3. Close the browser and anything else using the GPU, then check real free VRAM:
+1. Close the browser and anything else using the GPU, then check real free VRAM:
    `nvidia-smi --query-gpu=memory.free --format=csv`
-4. Drop to the next tier down. A Tier 1 model at full speed beats a Tier 2 model at 30%.
+2. Set `OLLAMA_KV_CACHE_TYPE=q8_0` and restart Ollama (see below) — the f16 cache is twice
+   the size and can be the difference between a split and a full fit.
+3. Lower `num_ctx` in the Modelfile and rebuild.
+4. Drop to a model that fits. A fully-GPU model at full speed beats a split one.
+
+Placement has only been measured once on this rig and that measurement had a known
+bug (`results/README.md`), so treat "does it fit" as an open question until re-measured.
 
 ## Everything is suddenly ~5x slower after an Ollama update
 
@@ -55,19 +58,17 @@ lot and running into this.
 
 ## The model still refuses things
 
-No abliteration is perfect and refusals survive in some phrasings. In order of what to try:
+Refusal behaviour is specific to the base model, so it varies by model even at the same
+size. On this rig, only one of the four probed 7B models refused anything: `qwen2.5-coder`
+(3/15 — dark fiction, blunt tone, a history detail). In order of what to try:
 
-1. **Switch lineage.** Run the same prompt against `hunter-dolphin`. Surviving refusals are
-   specific to the base model, so a Llama-lineage model often answers what a Qwen-lineage
-   one declines. This works more often than any prompt trick.
-2. **Check you did not override the system prompt.** `hunter-open` and `hunter-open-fast`
-   must have **no** `SYSTEM` block in their Modelfiles — the JOSIEFIED system prompt is
-   part of the openness finetune, and replacing it weakens compliance. If you added one,
-   remove it and rebuild.
-3. **Reformulate rather than argue.** Restating the request usually beats trying to talk
+1. **Switch to the measured safe model.** `qwen2.5:7b` scored 0 refusals across two
+   independent runs. If your workflow will not leave coders alone, keep `qwen2.5-coder`
+   for code and take sensitive prompts to `qwen2.5:7b` — that is measured to work.
+2. **Reformulate rather than argue.** Restating the request usually beats trying to talk
    the model out of a refusal in a follow-up turn.
-4. **Confirm the model you think you are running.** `ollama ps` shows what is actually
-   loaded. `hunter-max` is abliteration-only and refuses noticeably more than the others.
+3. **Confirm the model you think you are running.** `ollama ps` shows what is actually
+   loaded.
 
 If a whole category is being refused, measure it rather than guessing:
 
@@ -87,9 +88,10 @@ prompts — that is what it is for), or the models never loaded and every probe 
 ## The refusal probe says 0% but the model still annoys me
 
 Look at the hedge column. A model can answer everything and still wrap each answer in
-disclaimers. That is a system-prompt problem, not a weights problem — for `hunter-dolphin`
-and `hunter-max` you can edit the `SYSTEM` block in their Modelfiles and rebuild. Do not
-do this for the JOSIEFIED models.
+disclaimers. On this rig that behaviour is measured: `qwen2.5:7b` and `mistral:7b` hedge
+2/15, `qwen2.5-coder` 1/15, and the abliterate twin 0/15. If a model's hedging annoys you,
+check whether you are setting a system prompt that invites moralizing — otherwise try a
+different model; the hedge column is in the probe output precisely so you can compare.
 
 ## `bench.py` can't connect
 
