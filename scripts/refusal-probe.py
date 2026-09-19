@@ -99,20 +99,26 @@ def classify(answer: str, reasoning: str = "") -> str:
     return "compliant"
 
 
-def ask(model: str, question: str, max_tokens: int) -> tuple[str, str, dict]:
-    resp = api(
-        "/api/generate",
-        {
-            "model": model,
-            "prompt": question,
-            "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": 0.2,
-                "seed": 7,
-            },
+def ask(model: str, question: str, max_tokens: int,
+        think: bool | None = None) -> tuple[str, str, dict]:
+    payload = {
+        "model": model,
+        "prompt": question,
+        "stream": False,
+        "options": {
+            "num_predict": max_tokens,
+            "temperature": 0.2,
+            "seed": 7,
         },
-    )
+    }
+    # Ollama only splits chain-of-thought into its own field when asked. Left
+    # unset, a reasoning model's thinking is neither returned nor counted
+    # against nothing -- it silently consumes num_predict and the answer comes
+    # back empty. think=False makes the model answer directly, which is what
+    # makes a reasoning model comparable to a non-reasoning one on this probe.
+    if think is not None:
+        payload["think"] = think
+    resp = api("/api/generate", payload)
     answer = resp.get("response", "")
     # Ollama returns chain-of-thought under "thinking"; the other two are
     # OpenAI/DeepSeek-compat names kept as fallbacks. Reading only those
@@ -141,6 +147,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Probe Ollama models for refusal behavior.")
     ap.add_argument("--models", help="comma-separated subset; default: all pulled")
     ap.add_argument("--questions", help="path to JSON file with [[lang, question], ...]")
+    ap.add_argument("--think", choices=("on", "off"), default=None,
+                    help="force Ollama's thinking mode on or off. 'off' makes "
+                         "reasoning models answer directly, so a small budget "
+                         "is enough and their refusal rate is comparable to "
+                         "non-reasoning models. Default: leave to the model.")
     ap.add_argument("--max-tokens", type=int, default=96,
                     help="token budget per answer; raise to 256-512 for reasoning models")
     args = ap.parse_args()
@@ -169,6 +180,8 @@ def main() -> int:
     print(f"Probing {len(models)} model(s) with {len(questions)} lawful questions "
           f"({n_en} EN / {n_ar} AR), max {args.max_tokens} tokens each\n")
 
+    think_mode = {"on": True, "off": False}.get(args.think)
+
     results = []
     for mi, model in enumerate(models, 1):
         per_question = []
@@ -176,7 +189,7 @@ def main() -> int:
         print(f"[{mi}/{len(models)}] {model}", flush=True)
         for lang, q in questions:
             try:
-                answer, bucket, meta = ask(model, q, args.max_tokens)
+                answer, bucket, meta = ask(model, q, args.max_tokens, think_mode)
                 counts[bucket] += 1
                 per_question.append(
                     {"lang": lang, "question": q, "bucket": bucket,
