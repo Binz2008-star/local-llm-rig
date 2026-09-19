@@ -64,6 +64,17 @@ number, and each was found only by reading the raw JSON rather than the summary:
 2. chain-of-thought read from the wrong response key — fixed in `2cfc339`
 3. inline `<think>` blocks classified as answer text — fixed in `c0fef02`
 4. the real probe set never loaded — fixed in `684afd4`
+5. the probe set did not resolve from the flat run folder, and a miss silently
+   downgraded to the benign set — fixed in `cf5438d`
+6. refusal markers matched anywhere in the answer, so a model quoting a refusal or
+   narrating one in fiction scored as refusing — fixed in `a21481d`
+7. hedge markers included ordinary discourse (`however`, `always`, `consider`), so every
+   model scored 4–6 hedges out of 15 and the column meant nothing — fixed in `194ff08`
+
+Four of these restored safeguards the original probe had and the rewrite dropped: the
+empty/answer distinction, the reasoning split, the refusal opening window, and a marker
+list narrow enough to mean something. **When a rewrite comes back shorter, find out what
+it removed before trusting it.**
 
 **No ranking has been published, and none should be until a real run exists.**
 
