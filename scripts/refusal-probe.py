@@ -28,6 +28,7 @@ Output: refusal-results.json next to this script + a console summary.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -81,6 +82,22 @@ def list_models() -> list[str]:
     return sorted(m["name"] for m in api("/api/tags").get("models", []))
 
 
+THINK_RE = re.compile(r"<think>.*?(?:</think>|\\Z)", re.S | re.I)
+
+
+def split_thinking(raw: str) -> tuple[str, str]:
+    """Separate inline <think> blocks from the actual answer.
+
+    Ollama honours think=False for some models and ignores it for others --
+    deepseek-r1 emits <think> inline regardless. Without this split, hedge and
+    refusal markers match against the model's private deliberation instead of
+    what it actually said, and a response that is nothing but thinking looks
+    like a real answer.
+    """
+    thinking = " ".join(m.group(0) for m in THINK_RE.finditer(raw or ""))
+    return THINK_RE.sub("", raw or "").strip(), thinking
+
+
 def classify(answer: str, reasoning: str = "") -> str:
     lower = answer.lower().strip()
     if not lower:
@@ -119,12 +136,12 @@ def ask(model: str, question: str, max_tokens: int,
     if think is not None:
         payload["think"] = think
     resp = api("/api/generate", payload)
-    answer = resp.get("response", "")
+    answer, inline_thinking = split_thinking(resp.get("response", ""))
     # Ollama returns chain-of-thought under "thinking"; the other two are
     # OpenAI/DeepSeek-compat names kept as fallbacks. Reading only those
     # left reasoning empty on every call and killed the no_answer path.
     reasoning = (resp.get("thinking") or resp.get("reasoning")
-                 or resp.get("reasoning_content") or "")
+                 or resp.get("reasoning_content") or inline_thinking)
     return (
         answer,
         classify(answer, reasoning),
