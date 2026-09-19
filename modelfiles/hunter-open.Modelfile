@@ -1,3 +1,9 @@
+# STATUS: UNTESTED PROPOSAL. Not built, not run, not measured.
+# The base image in FROM below was not installed on the reference rig (GTX 1060 6GB,
+# 2026-09-19), so no claim in the comments here -- compliance, fit, speed -- has been
+# checked. The "100% GPU" / VRAM-budget figures predate the measurements in
+# docs/HARDWARE_NOTES.md section 8, which contradict them. See modelfiles/README.md.
+#
 # hunter-open — DEFAULT. The most de-restricted model that fits on this card.
 #
 # Josiefied-Qwen3-8B-abliterated-v1: abliterated AND then finetuned for openness and
