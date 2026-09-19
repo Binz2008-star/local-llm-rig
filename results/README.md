@@ -73,3 +73,22 @@ because the set has no discriminating power.
 The probe now defaults to the real set, with `--sanity` for the benign control. A full
 re-run against it is required before the ranking in `docs/MODEL_SELECTION.md` can be
 written from evidence.
+
+## Placement data in the bench run is unreliable
+
+`bench-2026-09-19-gtx1060.json` carries a `vram` block per model. Do not cite it.
+
+`scripts/bench.py` read `/api/ps` and matched the loaded model with
+`name.startswith(model.split(":")[0])`. That family-prefix match makes `qwen2.5` match
+`qwen2.5-coder:7b`, and `deepseek-r1:7b` match `deepseek-r1:8b`, so a placement row can
+belong to a different model entirely. `deepseek-r1:8b` came back `null`, meaning no
+placement was captured for it at all — it is missing data, not a model that failed to fit.
+
+The run also predates recording `OLLAMA_KV_CACHE_TYPE`. That variable is unset on the rig,
+so the bench ran with the f16 KV cache rather than the `q8_0` that `scripts/setup.ps1` is
+supposed to set. An f16 cache is twice the size, so part of the measured spill is the cache
+configuration rather than the model.
+
+Both are fixed in the script: exact-tag matching, and the cache type is now recorded in the
+output. Throughput (`gen_tok_s`, `prompt_tok_s`, `ttft_ms`) is unaffected by either bug and
+remains valid. Placement must be re-measured, with `OLLAMA_KV_CACHE_TYPE` set first.

@@ -108,8 +108,14 @@ def bench_model(model: str, prompt_tokens: int, gen_tokens: int) -> dict:
     placement = {"in_vram": None, "vram_mb": None, "total_mb": None}
     try:
         ps = api("/api/ps")
+        # Ollama reports ":latest" for an untagged pull, so normalise both sides.
+        # Matching on the family prefix instead would attribute qwen2.5-coder's
+        # placement to qwen2.5, and deepseek-r1:8b's to deepseek-r1:7b.
+        def _tagged(name: str) -> str:
+            return name if ":" in name else f"{name}:latest"
+
         for m in ps.get("models", []):
-            if m["name"] == model or m["name"].startswith(model.split(":")[0]):
+            if _tagged(m["name"]) == _tagged(model):
                 placement = {
                     "in_vram": bool(m.get("size_vram", 0)) and m.get("size_vram", 0) >= m.get("size", 0) * 0.999,
                     "vram_mb": round((m.get("size_vram") or 0) / (1024 * 1024), 0),
@@ -189,7 +195,13 @@ def main() -> int:
 
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bench-results.json")
     with open(out, "w", encoding="utf-8") as f:
-        json.dump({"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": results}, f, indent=2)
+        json.dump({
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            # Placement numbers are meaningless without this: an f16 KV cache
+            # is twice the size of q8_0, so the same model spills differently.
+            "kv_cache_type": os.environ.get("OLLAMA_KV_CACHE_TYPE") or "unset (f16 default)",
+            "results": results,
+        }, f, indent=2)
     print(f"\nSaved {out}")
     return 0
 

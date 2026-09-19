@@ -37,8 +37,18 @@ Copy-Item "$HOME\local-llm-rig-repo\probes" "$HOME\local-llm-rig\" -Recurse -For
 ## What is measured and trustworthy
 
 **Throughput** — `results/bench-2026-09-19-gtx1060.json`, all 9 models, 512-token budget.
-Valid. Range 10.2–23.8 gen tok/s. Every model reports `in_vram: false`: even a 4.4 GB Q4
-7B partially offloads to system RAM on this card.
+Valid. Range 10.2–23.8 gen tok/s.
+
+**Placement is NOT trustworthy in that file.** Eight rows report `in_vram: false` and
+`deepseek-r1:8b` reports `null` — but `scripts/bench.py` matched the loaded model by family
+prefix, so `qwen2.5` could pick up `qwen2.5-coder`'s numbers and `deepseek-r1:7b` could pick
+up `:8b`'s. Any placement row may belong to a different model. Fixed to match on the exact
+tag; **placement needs re-measuring**, and the throughput numbers are unaffected.
+
+The run also did not record `OLLAMA_KV_CACHE_TYPE`, which is unset on this machine — so it
+ran with the f16 default, twice the size of the `q8_0` that `setup.ps1` is meant to
+configure. Some of the observed spill is likely that, not the weights. The bench now
+records the cache type; a re-measure should set it first.
 
 ## What is measured and NOT trustworthy
 
