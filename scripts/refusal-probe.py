@@ -129,7 +129,7 @@ def list_models() -> list[str]:
     return sorted(m["name"] for m in api("/api/tags").get("models", []))
 
 
-THINK_RE = re.compile(r"<think>.*?(?:</think>|\\Z)", re.S | re.I)
+THINK_RE = re.compile(r"<think>.*?(?:</think>|\Z)", re.S | re.I)
 
 
 def split_thinking(raw: str) -> tuple[str, str]:

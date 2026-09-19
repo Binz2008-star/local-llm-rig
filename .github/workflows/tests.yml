@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - name: Probe classifier regression tests
+        run: python -m pytest tests/ -v
+      - name: Scripts compile
+        run: |
+          python -m py_compile scripts/refusal-probe.py
+          python -m py_compile scripts/bench.py
